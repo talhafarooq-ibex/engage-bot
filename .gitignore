@@ -1,0 +1,9 @@
+app/__pycache__
+app/audio
+__pycache__
+decorators/__pycache__
+routers/__pycache__
+routers/chats/__pycache__
+engage-ragenv
+library
+.env
