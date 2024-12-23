@@ -1,29 +1,38 @@
-import tiktoken, urllib, json, requests, uuid, pymongo, urllib3, torch
-from decouple import config
+import json
+import urllib
+import uuid
 from datetime import datetime, timedelta
+
+import pymongo
+import requests
+import tiktoken
+import torch
+import urllib3
+from decouple import config
 from fastapi import HTTPException
-from langchain_community.vectorstores import FAISS
-from langchain_chroma import Chroma
-from langchain_community.vectorstores import LanceDB
 from lancedb.rerankers import LinearCombinationReranker
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import MessagesPlaceholder
+from langchain_chroma import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS, LanceDB
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
-
+from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from utilities.database import connect
 from utilities.redis import enqueue
-from routers.chats.utilities.summary import client_summary_otherllms, client_summary_anythingllm
+from utilities.time import current_time
+
 from routers.chats.utilities.suggestions import (
-    client_suggestions_otherllms, client_message_suggestions_otherllms, client_suggestions_anythingllm, client_message_suggestions_anythingllm
-)
+    client_message_suggestions_anythingllm,
+    client_message_suggestions_otherllms, client_suggestions_anythingllm,
+    client_suggestions_otherllms)
+from routers.chats.utilities.summary import (client_summary_anythingllm,
+                                             client_summary_otherllms)
 
 enc = tiktoken.get_encoding("cl100k_base")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -57,10 +66,10 @@ prompt_transfer_arabic = config("PROMPT_TRANSFER_ARABIC")
 transfer_queue = config("TRANSFER_QUEUE")
 
 sentiment_url = config("SENTIMENT_URL")
-x_app_key = config("X_APP_KEY")
+x_app_key_var = config("X_APP_KEY")
 
 sentiment_headers = {
-    'x-app-key': x_app_key,
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
 
@@ -94,7 +103,7 @@ async def client_flow(
         if await max_allowed_chats(workspace_record['workspace_id'], session_id, bots_record['bot_name'], max_sessions):
             return "No agent is available at the moment. Try again later!"
 
-        if text == language_arabic or text == language_english:
+        if text in (language_arabic, language_english):
             response = await client_language_message(text, bots_record, workspace_record, configuration_record, session_id)
         
         elif text == human_end_message:
@@ -133,13 +142,11 @@ async def agent_involved_chat(
         if not (message_record['transfer_conversation'] or message_record['human_intervention']):
             return False
         
-        if message_record['transfer_conversation'] or message_record['human_intervention']:
-            if text == human_end_message:
-                await client_goodbye_message(bots_record, workspace_record, configuration_record, session_id)
-                return True
+        if (message_record['transfer_conversation'] or message_record['human_intervention']) and text == human_end_message:
+            await client_goodbye_message(bots_record, workspace_record, configuration_record, session_id)
+            return True
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record['roles'].append({
             "type": 'human', "text": text, "timestamp": human_time, "input_tokens": 0, "sentiment": None, 'id': str(uuid.uuid4())
@@ -400,8 +407,7 @@ async def client_language_message(
                     history_messages_key="chat_history"      
                 )
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
         if message_record: 
@@ -442,8 +448,7 @@ async def client_language_message(
             input_tokens = len(enc.encode(display_message))
             output_tokens = len(enc.encode(response['textResponse']))
 
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
 
             message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -465,8 +470,7 @@ async def client_language_message(
                 input_tokens = response.response_metadata['token_usage']['prompt_tokens']
                 output_tokens = response.response_metadata['token_usage']['completion_tokens']
     
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
 
             message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -563,12 +567,11 @@ async def client_goodbye_message(
         message_record = await messages_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
 
-        if not workspace_record['llm'] == 'anythingllm':
+        if workspace_record['llm'] != 'anythingllm':
             history_collections = db['history']
             await history_collections.delete_many({'SessionId': session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         if profiles_record['queue'] == 'web':
             if profiles_record['preference'] == language_english:
@@ -680,8 +683,7 @@ async def client_goodbye_web_response(
 
             output_tokens = len(enc.encode(response['textResponse']))
 
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
             
             message_record = await messages_collections.find_one({"session_id": session_id})
             await messages_collections.update_one({"_id": message_record["_id"]}, {"$set": {"end_conversation": 1}})
@@ -700,8 +702,7 @@ async def client_goodbye_web_response(
             elif profiles_record['preference'] == language_arabic:
                 response = await llm.ainvoke(prompt_goodbye_arabic)
 
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
 
             message_record = await messages_collections.find_one({"session_id": session_id})
             await messages_collections.update_one({"_id": message_record["_id"]}, {"$set": {"end_conversation": 1}})
@@ -790,15 +791,14 @@ async def client_transfer_message(
         messages_collections = db['messages']
         profiles_collections = db['profiles']
 
-        if not workspace_record['llm'] == 'anythingllm':
+        if workspace_record['llm'] != 'anythingllm':
             history_collections = db['history']
             await history_collections.delete_many({'SessionId': session_id})
 
         message_record = await messages_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         if profiles_record['preference'] == language_english:
             if workspace_record['llm'] == 'anythingllm':
@@ -909,8 +909,7 @@ async def client_transfer_web_response(
 
             output_tokens = len(enc.encode(response['textResponse']))
 
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
             
             message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -930,8 +929,7 @@ async def client_transfer_web_response(
             elif profiles_record['preference'] == language_arabic:
                 response = await llm.ainvoke(prompt_transfer_arabic)
 
-            now = datetime.now()
-            bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            bot_time = current_time()
 
             message_record = await messages_collections.find_one({"session_id": session_id})
             await messages_collections.update_one({"_id": message_record["_id"]}, {"$set": {"transfer_conversation": 1}})
@@ -1032,7 +1030,7 @@ async def client_conversation(
 
         chat_limit = int(workspace_record['chat_limit']) * 2
 
-        if not workspace_record['llm'] == 'anythingllm':
+        if workspace_record['llm'] != 'anythingllm':
             history_collections = db['history']
             history_records = await history_collections.find({'SessionId': session_id}, sort=[("_id", pymongo.DESCENDING)]).to_list(length=None)
 
@@ -1041,8 +1039,6 @@ async def client_conversation(
                 record_ids_to_remove = [record['_id'] for record in records_to_remove]
 
                 await history_collections.delete_many({'_id': {'$in': record_ids_to_remove}})
-
-            llm = await llm_selection(workspace_record)
 
         if workspace_record['llm'] == 'anythingllm':
             response = await anythingllm_conversation(
@@ -1081,8 +1077,7 @@ async def anythingllm_conversation(
 
         url, headers, new_slug = await anythingllm_connection(workspace_record, message_record)
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         input_tokens = len(enc.encode(text))
 
@@ -1118,8 +1113,7 @@ async def anythingllm_conversation(
 
         output_tokens = len(enc.encode(response['textResponse']))
 
-        now = datetime.now()
-        bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        bot_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -1244,8 +1238,7 @@ async def non_embedding_conversation_chain(
                 history_messages_key="chat_history" 
             )
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
         if message_record: 
@@ -1280,8 +1273,7 @@ async def non_embedding_conversation_chain(
             input_tokens = response.response_metadata['token_usage']['prompt_tokens']
             output_tokens = response.response_metadata['token_usage']['completion_tokens']
     
-        now = datetime.now()
-        bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        bot_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -1421,8 +1413,7 @@ async def embedding_conversation_chain(
                 output_messages_key="answer"       
             )
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
         if message_record: 
@@ -1465,8 +1456,7 @@ async def embedding_conversation_chain(
         tokens = enc.encode(response['answer'])
         output_tokens += len(tokens)
 
-        now = datetime.now()
-        bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        bot_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
 

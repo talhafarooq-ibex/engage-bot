@@ -1,16 +1,21 @@
-import pymongo, time, random, string
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
+import random
+import string
+import time
 from datetime import datetime
 
+import pymongo
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from utilities.database import connect
-from utilities.validation import check_required_fields, check_link_validity
+from utilities.time import current_time
+from utilities.validation import (check_link_validity, check_required_fields,
+                                  validate_inputs)
 
 documents_router = APIRouter()
 
@@ -26,29 +31,20 @@ async def get_all(request: Request):
 
         required_fields = ['bot_id', 'workspace_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id = data.get('bot_id'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
-        workspace_collections = db['workspace']
         library_collections = db['library']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-            
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
 
         library_records = await library_collections.find({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id
@@ -58,7 +54,6 @@ async def get_all(request: Request):
             raise HTTPException(status_code = 404, detail = "An error occurred: no documents available for the bot")
             
         results = []
-
         for record in library_records:
             try:
                 temp = {
@@ -75,10 +70,8 @@ async def get_all(request: Request):
                     
         return JSONResponse(results, status_code = 200)   
         
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @documents_router.get('/get')
 @x_super_team
@@ -90,29 +83,20 @@ async def get(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'document_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, document_id = data.get('bot_id'), data.get('workspace_id'), data.get('document_id')
 
         company_id = request.headers.get('x-super-team')
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
-        workspace_collections = db['workspace']
         library_collections = db['library']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-        
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-            
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
         
         library_record = await library_collections.find_one({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "document_id": document_id
@@ -134,10 +118,8 @@ async def get(request: Request):
 
         return JSONResponse(temp, status_code = 200)   
         
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @documents_router.post('/upload')
 @x_super_team
@@ -149,7 +131,7 @@ async def upload(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'documents']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, files, workspace_id = data.get('bot_id'), data.getlist('documents'), data.get('workspace_id')
         
@@ -160,28 +142,20 @@ async def upload(request: Request):
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
         library_collections = db['library']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
+        bots_collections = db['bots']
         
         for file in files:                 
             library_record = await library_collections.find_one({
                 "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1, "file_name": file.filename
             })
-
-            workspace_record = await workspace_collections.find_one({
-                "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-            })
-        
-            if not workspace_record:
-                raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
 
             if library_record and library_record['file_name'] == file.filename:
                 raise HTTPException(status_code = 400, detail = "An error occurred: document already exists")
@@ -194,8 +168,7 @@ async def upload(request: Request):
             else: 
                 document_id = '1'
 
-            now = datetime.now()
-            date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            date_time = current_time()
 
             document = {
                 'company_id': company_id, 'bot_id': bot_id, "workspace_id": workspace_id, 'document_id': document_id, 'file_name': file.filename, 'url': None,
@@ -213,12 +186,10 @@ async def upload(request: Request):
 
             time.sleep(1)
 
-        return JSONResponse(content={"detail": f"Documents have been uploaded."}, status_code = 200)
+        return JSONResponse(content={"detail": "Documents have been uploaded."}, status_code = 200)
 
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @documents_router.post('/create')
 @x_super_team
@@ -230,30 +201,22 @@ async def create(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'text']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, text, workspace_id = data.get('bot_id'), data.get('text'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
         library_collections = db['library']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:   
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-        
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
+        bots_collections = db['bots']
 
         latest_document = await library_collections.find_one({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id}, sort=[("created_date", pymongo.DESCENDING)]
@@ -282,8 +245,7 @@ async def create(request: Request):
 
         doc.build(elements)
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         document = {
             'company_id': company_id, 'bot_id': bot_id, 'document_id': document_id, "workspace_id": workspace_id, 'file_name': f'{filename}.pdf', 'url': None,  
@@ -295,12 +257,10 @@ async def create(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
 
-        return JSONResponse(content={"detail": f"Documents have been created."}, status_code = 200)
+        return JSONResponse(content={"detail": "Documents have been created."}, status_code = 200)
 
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @documents_router.post('/url')
 @x_super_team
@@ -312,38 +272,29 @@ async def url(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'urls']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, urls, workspace_id = data.get('bot_id'), data.getlist('urls'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
         library_collections = db['library']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:   
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-        
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
+        bots_collections = db['bots']
 
         for url in urls:
             if not check_link_validity(url):
                 raise HTTPException(status_code = 400, detail = f"An error occurred: invalid url: {url}")
 
         for url in urls:
-            now = datetime.now()
-            date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            date_time = current_time()
 
             latest_document = await library_collections.find_one({
                 "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id}, sort=[("created_date", pymongo.DESCENDING)]
@@ -364,12 +315,10 @@ async def url(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
 
-        return JSONResponse(content={"detail": f"URLs have been created."}, status_code = 200)
+        return JSONResponse(content={"detail": "URLs have been created."}, status_code = 200)
 
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @documents_router.post('/disable')
 @x_super_team
@@ -381,40 +330,31 @@ async def disable(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'document_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, document_id, workspace_id = data.get('bot_id'), data.get('document_id'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-    
-        bots_collections = db['bots']
         library_collections = db['library']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-    
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
+        bots_collections = db['bots']
 
         library_record = await library_collections.find_one({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "document_id": document_id, "is_active": 1
         })
         
         if not library_record:
-            raise HTTPException(status_code = 404, detail = f"An error occurred: document is disabled or doesn\'t exist")
+            raise HTTPException(status_code = 404, detail = "An error occurred: document is disabled or doesn\'t exist")
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         await library_collections.update_one({"_id": library_record["_id"]}, {"$set": {"is_active": 0}})
         await library_collections.update_one({"_id": library_record["_id"]}, {"$set": {"modified_date": date_time}})
@@ -423,12 +363,10 @@ async def disable(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
 
-        return JSONResponse(content={"detail": f"Document has been disabled."}, status_code = 200)
+        return JSONResponse(content={"detail": "Document has been disabled."}, status_code = 200)
 
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @documents_router.post('/enable')
 @x_super_team
@@ -440,40 +378,31 @@ async def enable(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'document_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, document_id, workspace_id = data.get('bot_id'), data.get('document_id'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-    
-        bots_collections = db['bots']
         library_collections = db['library']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-        
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
+        bots_collections = db['bots']
         
         library_record = await library_collections.find_one({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "document_id": document_id, "is_active": 0
         })
         
         if not library_record:
-            raise HTTPException(status_code = 404, detail = f"An error occurred: document is enabled or doesn\'t exist")
+            raise HTTPException(status_code = 404, detail = "An error occurred: document is enabled or doesn\'t exist")
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         await library_collections.update_one({"_id": library_record["_id"]}, {"$set": {"is_active": 1}})
         await library_collections.update_one({"_id": library_record["_id"]}, {"$set": {"modified_date": date_time}})
@@ -482,9 +411,7 @@ async def enable(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
 
-        return JSONResponse(content={"detail": f"Document has been enabled."}, status_code = 200)
+        return JSONResponse(content={"detail": "Document has been enabled."}, status_code = 200)
         
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e

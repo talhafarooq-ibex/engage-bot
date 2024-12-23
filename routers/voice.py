@@ -1,20 +1,24 @@
-import uuid, os, json, requests, tiktoken
+import json
+import os
+import uuid
 from datetime import datetime
-from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
-from langchain_community.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.prompts import MessagesPlaceholder
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
-from decouple import config
 
-from utilities.database import connect
+import requests
+import tiktoken
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from decouple import config
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+from langchain_community.chat_models import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_groq import ChatGroq
+from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
+from langchain_openai import ChatOpenAI
+from utilities.database import connect
+from utilities.time import current_time
 
 slug_db = config("SLUG_DATABASE")
 
@@ -24,13 +28,15 @@ display_language_english = config("DISPLAY_LANGUAGE_ENGLISH")
 language_arabic = config("LANGUAGE_ARABIC") 
 display_language_arabic = config("DISPLAY_LANGUAGE_ARABIC") 
 
-enc = tiktoken.get_encoding("cl100k_base")
+sentiment_url = config("SENTIMENT_URL")
+x_app_key_var = config("X_APP_KEY")
 
-sentiment_url = 'https://sentiments.enteract.app/get_sentiment'
 sentiment_headers = {
-    'x-app-key': 'eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjEiLCJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoibXVoYW1tYWQucml4dmFuLndhaGVlZEBnbWFpbC5jb20iLCJleHAiOjE2NzYyMzA4MjYsImlzcyI6Imh0dHBzOi8vbG9jYWxob3N0OjQ0MzY5LyIsImF1ZCI6Imh0dHBzOi8vbG9jYWxob3N0OjQyMDAifQ.NlSFdJSUQfDF0_hbXkfL_smZkfV8b9KFt4ToBFZDzO0',
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
+
+enc = tiktoken.get_encoding("cl100k_base")
 
 voice_router = APIRouter()
 
@@ -90,8 +96,7 @@ async def llm_response(text, session_id, token):
         tokens_record = await tokens_collections.find_one({"token": token, "is_active": 1})
 
         if tokens_record:
-            now = datetime.now()
-            date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            date_time = current_time()
 
             date_format = "%d/%m/%Y %H:%M:%S"
             created_date = datetime.strptime(date_time, date_format)
@@ -192,8 +197,6 @@ async def llm_response(text, session_id, token):
                         input_messages_key="input",
                         history_messages_key="chat_history",        
                     )
-
-                now = datetime.now()
                 
                 response = chain_with_history.invoke({'input': text}, config={
                     "configurable": {"session_id": session_id}
@@ -203,10 +206,8 @@ async def llm_response(text, session_id, token):
         else:
             raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @jwt_token
 @x_app_key
@@ -225,8 +226,7 @@ async def batch(request: Request, token: str = Form(...), session_id: str = Form
         tokens_record = await tokens_collections.find_one({"token": token, "is_active": 1})
 
         if tokens_record:
-            now = datetime.now()
-            date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+            date_time = current_time()
 
             date_format = "%d/%m/%Y %H:%M:%S"
             created_date = datetime.strptime(date_time, date_format)
@@ -300,12 +300,10 @@ async def batch(request: Request, token: str = Form(...), session_id: str = Form
             raise HTTPException(status_code=500, detail="Transcription failed")
         
         transcription_text = transcription_response["transcription"]
-        current_time_str = current_time.strftime("%d/%m/%Y %H:%M:%S")
 
         message_record = await messages_collections.find_one({'session_id': session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         input_tokens = len(enc.encode(transcription_text))
 
@@ -381,8 +379,7 @@ async def batch(request: Request, token: str = Form(...), session_id: str = Form
 
         message_record = await messages_collections.find_one({'session_id': session_id})
 
-        now = datetime.now()
-        bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        bot_time = current_time()
 
         output_tokens = len(enc.encode(result))
 
@@ -425,10 +422,8 @@ async def batch(request: Request, token: str = Form(...), session_id: str = Form
 
         return FileResponse(tts_audio_path, media_type="audio/wav", filename=os.path.basename(tts_audio_path))
     
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @jwt_token
 @x_app_key

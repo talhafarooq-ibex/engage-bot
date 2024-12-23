@@ -1,7 +1,9 @@
-import jwt
-from fastapi import HTTPException, Request, WebSocket
 from functools import wraps
+
 from decouple import config
+from fastapi import HTTPException, Request, WebSocket
+
+import jwt
 
 salt = config("TOKEN_SALT")
 
@@ -42,7 +44,7 @@ async def jwt_token_wb(websocket: WebSocket):
     authorization = websocket.headers.get('Authorization')
 
     if not authorization:
-        await websocket.send_json({"error": "An error occurred: missing 'Authorization' header"})
+        await websocket.send_json({"error": "An error occurred: missing authorization header"})
         await websocket.close() 
 
     try:
@@ -54,7 +56,7 @@ async def jwt_token_wb(websocket: WebSocket):
         payload = jwt.decode(authorization.split(' ')[1], salt, 'HS256', options)
 
     except:
-        await websocket.send_json({"error": "An error occurred: invalid 'x-app-key' header"})
+        await websocket.send_json({"error": "An error occurred: invalid authorization header"})
         await websocket.close() 
 
     return payload['UserId'], payload['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'], payload['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress']

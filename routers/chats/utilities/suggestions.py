@@ -1,17 +1,14 @@
 import requests
 from decouple import config
-from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-
+from langchain_openai import ChatOpenAI
 from utilities.database import connect
 
 host = config("DATABASE_HOST")
 username = config("DATABASE_USERNAME")
 password = config("DATABASE_PASSWORD")
 database = config("DATABASE_NAME")
-slug_db = config("SLUG_DATABASE")
-
 slug_db = config("SLUG_DATABASE")
 
 language_english = config("LANGUAGE_ENGLISH") 
@@ -73,16 +70,19 @@ async def client_suggestions_anythingllm(company_id, bot_id, workspace_id, sessi
         data = {
             "message": prompt_summary_suggestion_arabic.format(summary = summary),
             "mode": "chat"
-        }    
+        }  
 
-    response = requests.post(url, headers=headers, json=data)
-    response = response.json()  
+    try:  
+        response = requests.post(url, headers=headers, json=data)
+        response = response.json()  
 
-    suggestions.append(response['textResponse'])
+        suggestions.append(response['textResponse'])
 
-    await summaries_collections.update_one({"_id": summaries_record["_id"]}, {"$set": {"suggestions": suggestions}}) 
+        await summaries_collections.update_one({"_id": summaries_record["_id"]}, {"$set": {"suggestions": suggestions}}) 
 
-    return response['textResponse']
+        return response['textResponse']
+    except:
+        return ''
 
 async def client_suggestions_otherllms(company_id, bot_id, workspace_id, session_id):
     db = await connect()
@@ -99,11 +99,9 @@ async def client_suggestions_otherllms(company_id, bot_id, workspace_id, session
     slug = bots_record['bot_name'] + slug_db
     db = await connect(slug)
 
-    messages_collections = db['messages']
     profiles_collections = db['profiles']
     summaries_collections = db['summary']
     
-    message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
     profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
     summaries_record = await summaries_collections.find_one({"session_id": session_id})
@@ -188,16 +186,19 @@ async def client_message_suggestions_anythingllm(company_id, bot_id, workspace_i
         data = {
             "message": prompt_message_suggestion_arabic.format(history = history, message = message),
             "mode": "chat"
-        }    
+        } 
 
-    response = requests.post(url, headers=headers, json=data)
-    response = response.json()  
+    try:   
+        response = requests.post(url, headers=headers, json=data)
+        response = response.json()  
 
-    suggestions.append(response['textResponse'])
+        suggestions.append(response['textResponse'])
 
-    await summaries_collections.update_one({"_id": summaries_record["_id"]}, {"$set": {"suggestions": suggestions}})  
+        await summaries_collections.update_one({"_id": summaries_record["_id"]}, {"$set": {"suggestions": suggestions}})  
 
-    return response['textResponse']
+        return response['textResponse']
+    except:
+        return ''
 
 async def client_message_suggestions_otherllms(company_id, bot_id, workspace_id, session_id):
     db = await connect()

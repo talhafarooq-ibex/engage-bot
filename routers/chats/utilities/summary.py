@@ -1,11 +1,12 @@
+from datetime import datetime
+
 import requests
 from decouple import config
-from datetime import datetime
-from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-
+from langchain_openai import ChatOpenAI
 from utilities.database import connect
+from utilities.time import current_time
 
 host = config("DATABASE_HOST")
 username = config("DATABASE_USERNAME")
@@ -20,6 +21,15 @@ language_arabic = config("LANGUAGE_ARABIC")
 
 prompt_summary_english = config("PROMPT_SUMMARY_ENGLISH")
 prompt_summary_arabic = config("PROMPT_SUMMARY_ARABIC")
+
+def all_messages_to_string(message_record):
+    messages = []
+    for record in message_record['roles']:
+        if record['type'] == 'human' and record['text'] and record['text'].strip():
+            messages.append(record['text'])
+
+    messages = '. '.join(messages)
+    return messages
 
 async def client_summary_anythingllm(company_id, bot_id, workspace_id, session_id):
     db = await connect()
@@ -43,12 +53,7 @@ async def client_summary_anythingllm(company_id, bot_id, workspace_id, session_i
     message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
     profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
-    messages = []
-    for record in message_record['roles']:
-        if record['type'] == 'human':
-            messages.append(record['text'])
-
-    messages = '. '.join(messages)
+    messages = all_messages_to_string(message_record)
 
     headers = {
         'accept': 'application/json',
@@ -58,9 +63,6 @@ async def client_summary_anythingllm(company_id, bot_id, workspace_id, session_i
 
     message_record = await messages_collections.find_one({'session_id': session_id})
     url = f"{workspace_record['llm_url']}/api/v1/workspace/{workspace_record['model']}/thread/{message_record['slug']}/chat"
-
-    now = datetime.now()
-    human_time = now.strftime("%d/%m/%Y %H:%M:%S")
 
     profiles_record = await profiles_collections.find_one({"session_id": session_id})
     if profiles_record['preference'] == language_english:
@@ -78,8 +80,7 @@ async def client_summary_anythingllm(company_id, bot_id, workspace_id, session_i
     response = requests.post(url, headers=headers, json=data)
     response = response.json()
 
-    now = datetime.now()
-    summary_time = now.strftime("%d/%m/%Y %H:%M:%S")   
+    summary_time = current_time()
 
     document = {
         'company_id': company_id, 'bot_id': bot_id, 'session_id': session_id, 'summary': response['textResponse'], 
@@ -112,12 +113,7 @@ async def client_summary_otherllms(company_id, bot_id, workspace_id, session_id)
     message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
     profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
-    messages = []
-    for record in message_record['roles']:
-        if record['type'] == 'human':
-            messages.append(record['text'])
-
-    messages = '. '.join(messages)
+    messages = all_messages_to_string(message_record)
 
     if workspace_record['llm'] == 'openai':
         llm = ChatOpenAI(model_name = "gpt-3.5-turbo", temperature = 0, api_key = workspace_record['llm_api_key'], )
@@ -129,9 +125,6 @@ async def client_summary_otherllms(company_id, bot_id, workspace_id, session_id)
     elif workspace_record['llm'] == 'groq':
         llm = ChatGroq(model = workspace_record['model'], api_key = workspace_record['llm_api_key'])
 
-    now = datetime.now()
-    human_time = now.strftime("%d/%m/%Y %H:%M:%S")
-
     profiles_record = await profiles_collections.find_one({"session_id": session_id})
     if profiles_record['preference'] == language_english:
         response = await llm.ainvoke(prompt_summary_english.format(messages=messages))
@@ -139,8 +132,7 @@ async def client_summary_otherllms(company_id, bot_id, workspace_id, session_id)
     elif profiles_record['preference'] == language_arabic:
         response = await llm.ainvoke(prompt_summary_arabic.format(messages=messages))
 
-    now = datetime.now()
-    summary_time = now.strftime("%d/%m/%Y %H:%M:%S")  
+    summary_time = current_time()
 
     document = {
         'company_id': company_id, 'bot_id': bot_id, 'session_id': session_id, 'summary': response.content, 

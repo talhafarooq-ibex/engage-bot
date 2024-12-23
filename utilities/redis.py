@@ -1,4 +1,7 @@
-import json, aioredis
+import json
+
+import aioredis
+
 
 async def get_redis():
     return await aioredis.from_url("redis://localhost", decode_responses=True)

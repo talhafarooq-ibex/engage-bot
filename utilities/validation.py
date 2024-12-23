@@ -1,11 +1,14 @@
 import string
 from datetime import datetime
+
 from decouple import config
 from validators import url as is_valid_url
+
 from utilities.database import connect
+from utilities.time import current_time
 
 punc = string.punctuation
-punc = punc.replace('_', '').replace('[', '').replace(']', '')
+punc = punc.replace('_', '')
 
 host = config("DATABASE_HOST")
 username = config("DATABASE_USERNAME")
@@ -24,6 +27,9 @@ async def validate_inputs(company_id, bot_id, workspace_id):
     if not bots_record:
         return False
     
+    if not workspace_id:
+        return bots_record, None, None
+
     workspace_record = await workspace_collections.find_one({
         "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
     })
@@ -45,8 +51,7 @@ async def validate_token(token):
     if not tokens_record:
         return False
     
-    now = datetime.now()
-    date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+    date_time = current_time()
 
     date_format = "%d/%m/%Y %H:%M:%S"
     created_date = datetime.strptime(date_time, date_format)
@@ -62,9 +67,8 @@ async def validate_token(token):
     return await validate_inputs(company_id, bot_id, workspace_id)
 
 def process_name(name, underscore = 0):
-    if underscore:
-        if len(name.split(' ')) >= 2:
-            name = name.replace(' ', '_')
+    if underscore and len(name.split(' ')) >= 2:
+        name = name.replace(' ', '_')
 
     name = name.translate(str.maketrans('', '', punc)).strip()
     name = ' '.join(name.split())
@@ -72,12 +76,7 @@ def process_name(name, underscore = 0):
     return name
 
 def check_required_fields(data, required_fields):
-    for field in required_fields:
-        if not data.get(field):
-            return False
-    return True
+    return all(data.get(field) for field in required_fields)
 
 def check_link_validity(link):
-    if not is_valid_url(link):
-        return False
-    return True
+    return is_valid_url(link)
