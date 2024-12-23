@@ -1,30 +1,38 @@
-import json, uuid, requests, sqlite3, torch
-from langchain_community.vectorstores import FAISS, LanceDB
-from langchain_chroma import Chroma
-from lancedb.rerankers import LinearCombinationReranker
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from typing_extensions import TypedDict, Annotated
+import json
+import sqlite3
+import uuid
+from datetime import datetime
 from typing import Annotated, Optional
-from langgraph.prebuilt import tools_condition, ToolNode
-from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
-from langgraph.graph import START, StateGraph
+
+import requests
+import torch
+from decouple import config
+from fastapi import HTTPException
+from lancedb.rerankers import LinearCombinationReranker
+from langchain_chroma import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS, LanceDB
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from langgraph.graph import START, StateGraph
 from langgraph.graph.message import AnyMessage, add_messages
-from langchain_core.prompts import ChatPromptTemplate
-from fastapi import HTTPException
-from .mongo import AsyncMongoDBSaver
-from datetime import datetime
-from decouple import config
-
+from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
+from typing_extensions import Annotated, TypedDict
 from utilities.database import connect
 from utilities.redis import enqueue
-from routers.chats.utilities.client import agent_involved_chat, max_allowed_chats, llm_selection
-from routers.chats.utilities.summary import client_summary_otherllms
+from utilities.time import current_time
+
+from routers.chats.utilities.client import (agent_involved_chat, llm_selection,
+                                            max_allowed_chats)
 from routers.chats.utilities.suggestions import client_suggestions_otherllms
+from routers.chats.utilities.summary import client_summary_otherllms
+
+from .mongo import AsyncMongoDBSaver
 
 host = config("DATABASE_HOST")
 username = config("DATABASE_USERNAME")
@@ -59,10 +67,10 @@ prompt_transfer_arabic = config("PROMPT_TRANSFER_ARABIC")
 transfer_queue = config("TRANSFER_QUEUE")
 
 sentiment_url = config("SENTIMENT_URL")
-x_app_key = config("X_APP_KEY")
+x_app_key_var = config("X_APP_KEY")
 
 sentiment_headers = {
-    'x-app-key': x_app_key,
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
 
@@ -93,21 +101,6 @@ def create_tool_node_with_fallback(tools: list) -> dict:
         [RunnableLambda(handle_tool_error)], exception_key="error"
     )
 
-def _print_event(event: dict, _printed: set, max_length=1500):
-    current_state = event.get("dialog_state")
-    if current_state:
-        print("Currently in: ", current_state[-1])
-    message = event.get("messages")
-    if message:
-        if isinstance(message, list):
-            message = message[-1]
-        if message.id not in _printed:
-            msg_repr = message.pretty_repr(html=True)
-            if len(msg_repr) > max_length:
-                msg_repr = msg_repr[:max_length] + " ... (truncated)"
-            print(msg_repr)
-            _printed.add(message.id)
-
 @tool
 async def massage_information_retrieval(query: str, config: RunnableConfig):
     """
@@ -134,7 +127,7 @@ async def massage_information_retrieval(query: str, config: RunnableConfig):
     workspace_id = configuration.get("workspace_id", None)
 
     if not company_id or not bot_id or not workspace_id:
-        return f"Sorry, there was a problem with the configuration. Can you please try again"    
+        return "Sorry, there was a problem with the configuration. Can you please try again"    
 
     path = f"library/{company_id}/{bot_id}/{workspace_id}/embeddings"
 
@@ -215,7 +208,7 @@ async def search_bookings(
             _, massage_type, booking_datetime, booked, _ = row
             if booked:
                 conn.close()
-                return f"Massage is already booked by another user. Can you please adjust your preferences?"
+                return "Massage is already booked by another user. Can you please adjust your preferences?"
             else:
                 column_names = [column[0] for column in cursor.description]
                 result = [dict(zip(column_names, row))]
@@ -224,10 +217,10 @@ async def search_bookings(
                 return f"I have found this bookings result for your email:\n{result}"
         else:
             conn.close()
-            return f"Sorry, no massages found for either the given massage type or booking date. Can you please adjust your preferences?"
+            return "Sorry, no massages found for either the given massage type or booking date. Can you please adjust your preferences?"
     except:
         conn.close()
-        return f"Sorry, there was a problem with my understanding. Can you please try again"      
+        return "Sorry, there was a problem with my understanding. Can you please try again"      
 
 @tool
 async def book_bookings(
@@ -257,7 +250,7 @@ async def book_bookings(
     email = configuration.get("email", None)
 
     if not email or not company_id or not bot_id or not workspace_id:
-        return f"Sorry, there was a problem with the configuration. Can you please try again" 
+        return "Sorry, there was a problem with the configuration. Can you please try again" 
 
     db = await connect()
     workspace_collections = db['workspace']
@@ -281,15 +274,15 @@ async def book_bookings(
 
         try:
             if not scored_result or scored_result.binary_score == "no":
-                return f"Sorry, there was a problem with my understanding. Can you please try again."  
+                return "Sorry, there was a problem with my understanding. Can you please try again."  
         except:
-            return f"Sorry, there was a problem with my understanding. Can you please try again."  
+            return "Sorry, there was a problem with my understanding. Can you please try again."  
 
     conn = sqlite3.connect(db_booking)
     cursor = conn.cursor()
 
     if not (booking_id or (booking_datetime and massage_type)):
-        return f"Sorry, there was a problem with the booking. Can you please try again."
+        return "Sorry, there was a problem with the booking. Can you please try again."
     
     params = []
     query = "SELECT * FROM bookings WHERE 1 = 1"
@@ -325,7 +318,7 @@ async def book_bookings(
         if row:
             booking_id, massage_type, booking_datetime, booked, booked_by = row
             if booked:
-                return f"Massage is already booked by another user. Can you please adjust your preferences?"
+                return "Massage is already booked by another user. Can you please adjust your preferences?"
             else:
                 cursor.execute("UPDATE bookings SET booked = 1, booked_by = ? WHERE booking_id = ?", (email, booking_id,))
                 conn.commit()
@@ -335,10 +328,10 @@ async def book_bookings(
             conn.close()
             if massage_type and booking_datetime:
                 conn.close()
-                return f"Sorry, no massages found for either the given massage type or booking date. Can you adjust your preferences?" 
+                return "Sorry, no massages found for either the given massage type or booking date. Can you adjust your preferences?" 
     except:
         conn.close()
-        return f"Sorry, there was a problem with the booking. Can you please try again."  
+        return "Sorry, there was a problem with the booking. Can you please try again."  
 
 @tool
 async def cancel_bookings(
@@ -368,7 +361,7 @@ async def cancel_bookings(
     email = configuration.get("email", None)
 
     if not email or not company_id or not bot_id or not workspace_id:
-        return f"Sorry, there was a problem with the configuration. Can you please try again" 
+        return "Sorry, there was a problem with the configuration. Can you please try again" 
 
     db = await connect()
     workspace_collections = db['workspace']
@@ -392,9 +385,9 @@ async def cancel_bookings(
 
         try:
             if not scored_result or scored_result.binary_score == "no":
-                return f"Sorry, there was a problem with my understanding. Can you please try again."  
+                return "Sorry, there was a problem with my understanding. Can you please try again."  
         except:
-            return f"Sorry, there was a problem with my understanding. Can you please try again."  
+            return "Sorry, there was a problem with my understanding. Can you please try again."  
 
     conn = sqlite3.connect(db_booking)
     cursor = conn.cursor()
@@ -443,7 +436,7 @@ async def cancel_bookings(
             return f"Massage is successfully cancelled for {email}. Sorry for any inconvenience and let me know if you have any complaints."
     except:
         conn.close()
-        return f"Sorry, there was a problem with the cancellation. Can you please try again"  
+        return "Sorry, there was a problem with the cancellation. Can you please try again"  
 
 @tool
 def get_bookings(
@@ -494,7 +487,7 @@ def get_bookings(
 
     if not rows:
         conn.close()
-        return f"Sorry, no massages found for either the given massage type or booking date. Are you sure that you have booked any massage?"
+        return "Sorry, no massages found for either the given massage type or booking date. Are you sure that you have booked any massage?"
     
     column_names = [column[0] for column in cursor.description]
     results = [dict(zip(column_names, row)) for row in rows]
@@ -621,8 +614,7 @@ async def client_language_graph(
         message_record = await messages_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
         if message_record: 
@@ -674,8 +666,7 @@ async def client_language_graph(
                         input_tokens = response.response_metadata['token_usage']['prompt_tokens']
                         output_tokens = response.response_metadata['token_usage']['completion_tokens']
 
-                    now = datetime.now()
-                    bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+                    bot_time = current_time()
 
                     message_record = await messages_collections.find_one({"session_id": session_id})
 
@@ -766,8 +757,7 @@ async def client_goodbye_graph(
         await checkpoints_collections.delete_many({'thread_id': session_id})
         await checkpoint_writes_collections.delete_many({'thread_id': session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         if profiles_record['queue'] == 'web':
             if profiles_record['preference'] == language_english:
@@ -872,8 +862,7 @@ async def client_goodbye_web_response(
             for response in messages['messages'][::-1]:
                 if isinstance(response, AIMessage) and response.content: 
 
-                    now = datetime.now()
-                    bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+                    bot_time = current_time()
 
                     message_record = await messages_collections.find_one({"session_id": session_id})
                     await messages_collections.update_one({"_id": message_record["_id"]}, {"$set": {"end_conversation": 1}})
@@ -958,8 +947,7 @@ async def client_transfer_graph(
         message_record = await messages_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         if profiles_record['preference'] == language_english:
             input_tokens = None
@@ -1067,8 +1055,7 @@ async def client_transfer_web_response(
             for response in messages['messages'][::-1]:
                 if isinstance(response, AIMessage) and response.content: 
 
-                    now = datetime.now()
-                    bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+                    bot_time = current_time()
 
                     message_record = await messages_collections.find_one({"session_id": session_id})
                     await messages_collections.update_one({"_id": message_record["_id"]}, {"$set": {"transfer_conversation": 1}})
@@ -1156,8 +1143,7 @@ async def client_conversation_graph(
         message_record = await messages_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_record['workspace_id'], "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        human_time = current_time()
 
         message_record = await messages_collections.find_one({"session_id": session_id})
         if message_record: 
@@ -1207,8 +1193,7 @@ async def client_conversation_graph(
                         input_tokens = response.response_metadata['token_usage']['prompt_tokens']
                         output_tokens = response.response_metadata['token_usage']['completion_tokens']
                 
-                    now = datetime.now()
-                    bot_time = now.strftime("%d/%m/%Y %H:%M:%S")
+                    bot_time = current_time()
 
                     message_record = await messages_collections.find_one({"session_id": session_id})
 

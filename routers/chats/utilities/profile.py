@@ -1,16 +1,19 @@
-import string, secrets
-from fastapi import HTTPException
-from decouple import config
+import secrets
+import string
 from datetime import datetime
+
+from decouple import config
+from fastapi import HTTPException
 from utilities.database import connect
+from utilities.time import current_time
 
 slug_db = config("SLUG_DATABASE")
 
 sentiment_url = config("SENTIMENT_URL")
-x_app_key = config("X_APP_KEY")
+x_app_key_var = config("X_APP_KEY")
 
 sentiment_headers = {
-    'x-app-key': x_app_key,
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
 
@@ -24,8 +27,7 @@ async def create(bots_record, workspace_record, phone, username, email, queue):
         alphabet = string.ascii_letters + string.digits
         session_id = ''.join(secrets.choice(alphabet) for _ in range(16))
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         document = {
             'company_id': workspace_record["company_id"], 'bot_id': workspace_record["bot_id"], "email": email, "phone": phone, 

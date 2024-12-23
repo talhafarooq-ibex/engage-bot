@@ -1,20 +1,26 @@
-import tiktoken, io, csv
-from decouple import config
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+import csv
+import io
 
+import tiktoken
+import urllib3
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from decouple import config
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from utilities.database import connect
-from utilities.validation import check_required_fields, validate_inputs, validate_token
-from routers.chats.utilities.session import active_sessions, inactive_sessions, session_details
+from utilities.validation import (check_required_fields, validate_inputs,
+                                  validate_token)
+
 from routers.chats.utilities.agent import agent_flow
 from routers.chats.utilities.client import client_flow
-from routers.chats.utilities.profile import create
 from routers.chats.utilities.graph import client_graph
+from routers.chats.utilities.profile import create
+from routers.chats.utilities.session import (active_sessions,
+                                             inactive_sessions,
+                                             session_details)
 
-import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 enc = tiktoken.get_encoding("cl100k_base")
@@ -60,8 +66,10 @@ agent_arrival_arabic = config("AGENT_ARRIVAL_ARABIC")
 transfer_queue = config("TRANSFER_QUEUE")
 sentiment_url = config("SENTIMENT_URL")
 
+x_app_key_var = config("X_APP_KEY")
+
 sentiment_headers = {
-    'x-app-key': 'eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNobWFjLXNoYTI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6IjEiLCJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoibXVoYW1tYWQucml4dmFuLndhaGVlZEBnbWFpbC5jb20iLCJleHAiOjE2NzYyMzA4MjYsImlzcyI6Imh0dHBzOi8vbG9jYWxob3N0OjQ0MzY5LyIsImF1ZCI6Imh0dHBzOi8vbG9jYWxob3N0OjQyMDAifQ.NlSFdJSUQfDF0_hbXkfL_smZkfV8b9KFt4ToBFZDzO0',
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
 
@@ -79,7 +87,7 @@ async def active_get_all(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'bot_display', 'agent_display', 'queue_display', 'takeover_display', 'limit', 'page']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, bot_display = data.get('bot_id'), data.get('workspace_id'), data.get('bot_display')
         agent_display, queue_display, takeover_display = data.get('agent_display'), data.get('queue_display'), data.get('takeover_display')
@@ -90,7 +98,7 @@ async def active_get_all(request: Request):
 
         result = await validate_inputs(company_id, bot_id, workspace_id)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, configuration_record = result
         
@@ -103,10 +111,8 @@ async def active_get_all(request: Request):
             content = {"detail": items, "pagination": metadata}, status_code = 200
         )
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @chats_router.post('/inactive/get_all')
 @x_super_team
@@ -118,7 +124,7 @@ async def inactive_get_all(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'bot_display', 'agent_display', 'limit', 'page']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, bot_display = data.get('bot_id'), data.get('workspace_id'), data.get('bot_display')
         agent_display, limit, page = data.get('agent_display'), int(data.get('limit')), int(data.get('page'))
@@ -130,7 +136,7 @@ async def inactive_get_all(request: Request):
 
         result = await validate_inputs(company_id, bot_id, workspace_id)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, _ = result
         
@@ -144,10 +150,8 @@ async def inactive_get_all(request: Request):
             content = {"detail": items, "pagination": metadata}, status_code = 200
         )
         
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @chats_router.post('/get')
 @x_super_team
@@ -159,7 +163,7 @@ async def get(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'session_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, session_id = data.get('bot_id'), data.get('workspace_id'), data.get('session_id')
         start_date, end_date = data.get('start_date'), data.get('end_date')
@@ -168,7 +172,7 @@ async def get(request: Request):
 
         result = await validate_inputs(company_id, bot_id, workspace_id)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, _ = result
         
@@ -183,10 +187,8 @@ async def get(request: Request):
                 'suggestions': suggestions, 'session_time': formatted_time_diff, "detail": chats_history}, 
             status_code = 200)
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @chats_router.post('/export')
 @x_super_team
@@ -198,7 +200,7 @@ async def export(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'session_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, session_id = data.get('bot_id'), data.get('workspace_id'), data.get('session_id')
 
@@ -206,7 +208,7 @@ async def export(request: Request):
 
         result = await validate_inputs(company_id, bot_id, workspace_id)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, _, _ = result
         
@@ -231,12 +233,12 @@ async def export(request: Request):
         for record in message_record['roles']:
             try:
                 sentiment = record['sentiment']
-            except:
+            except Exception:
                 sentiment = None
 
             try:
                 agent_email = record['agent_email']
-            except:
+            except Exception:
                 agent_email = None
 
             if record['type'] == 'human-agent':
@@ -254,10 +256,8 @@ async def export(request: Request):
             headers={"Content-Disposition": "attachment; filename=export_session.csv"}
         )
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @chats_router.post('/profile')
 @x_super_team
@@ -269,13 +269,13 @@ async def profile(request: Request):
 
         required_fields = ['username', 'token', 'queue']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
         
         username, email, token, queue, phone = data.get('username'), data.get('email'), data.get('token'), data.get('queue'), data.get('phone')  
 
         result = await validate_token(token)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, _ = result
         
@@ -286,10 +286,8 @@ async def profile(request: Request):
 
         return JSONResponse(content={"detail": session_id}, status_code = 200)  
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @chats_router.post('/human_agent')
 @x_app_key
@@ -300,7 +298,7 @@ async def human_agent(request: Request):
 
         required_fields = ['token', 'text', 'session_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         token, session_id, text = data.get('token'), data.get('session_id'), data.get('text')
 
@@ -308,7 +306,7 @@ async def human_agent(request: Request):
 
         result = await validate_token(token)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, configuration_record = result
 
@@ -319,10 +317,8 @@ async def human_agent(request: Request):
 
         return JSONResponse(content={"detail": "Response has been created"}, status_code = 200)
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @chats_router.post('/batch')
 @x_app_key
@@ -333,13 +329,13 @@ async def batch(request: Request):
 
         required_fields = ['token', 'session_id', 'text']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         token, text, session_id = data.get('token'), data.get('text'), data.get('session_id')
 
         result = await validate_token(token)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, configuration_record = result
 
@@ -351,10 +347,8 @@ async def batch(request: Request):
         
         return JSONResponse(content={"detail": response}, status_code = 200)
     
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
         
 @chats_router.post('/whatsapp')
 @x_app_key
@@ -365,13 +359,13 @@ async def batch_whatsapp(request: Request):
 
         required_fields = ['token', 'session_id', 'text']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         token, text, session_id = data.get('token'), data.get('text'), data.get('session_id')
 
         result = await validate_token(token)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, configuration_record = result
 
@@ -383,10 +377,8 @@ async def batch_whatsapp(request: Request):
         
         return JSONResponse(content={"detail": response}, status_code = 200)
     
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @chats_router.post('/graph')
 @x_app_key
@@ -397,13 +389,13 @@ async def batch_graph(request: Request):
 
         required_fields = ['token', 'session_id', 'text']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         token, text, session_id = data.get('token'), data.get('text'), data.get('session_id')
 
         result = await validate_token(token)
         if not result:
-            raise HTTPException(status_code = 400, detail = f"An error occurred: invalid parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
         else:
             bots_record, workspace_record, configuration_record = result
 
@@ -415,7 +407,5 @@ async def batch_graph(request: Request):
         
         return JSONResponse(content={"detail": response}, status_code = 200)
     
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e

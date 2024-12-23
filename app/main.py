@@ -1,22 +1,22 @@
 import nltk
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+from routers.agents import agents_router
 from routers.bots import bots_router
-from routers.workspaces import workspaces_router
+from routers.chats.apis import chats_router
+from routers.configuration import configuration_router
+from routers.csat import csat_router
+from routers.dashboard.analytics import analytics_router
+from routers.dashboard.session import dashboard_router
 from routers.documents import documents_router
 from routers.embeddings import embeddings_router
+from routers.misc import misc_router
 from routers.tokens import tokens_router
-from routers.agents import agents_router
-from routers.chats.apis import chats_router
-from routers.analytics import analytics_router
-from routers.dashboard import dashboard_router
-from routers.csat import csat_router
-from routers.configuration import configuration_router
 from routers.voice import voice_router
 from routers.voice_classifiers import classifier_router
-from routers.misc import misc_router
+from routers.workspaces import workspaces_router
 
 nltk.download('punkt')
 
@@ -48,4 +48,4 @@ app.include_router(misc_router, prefix="/misc")
 app.mount("/", StaticFiles(directory="static", html = True), name="static")
 
 if __name__ == "__main__":
-    app.run()
+    uvicorn.run(app)

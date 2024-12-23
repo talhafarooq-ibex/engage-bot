@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Request, Form, HTTPException
 from datetime import datetime
-from decouple import config
 
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from decouple import config
+from fastapi import APIRouter, Form, HTTPException, Request
 from utilities.database import connect
+from utilities.time import current_time
 from utilities.validation import check_required_fields
 
 salt = config("TOKEN_SALT")
@@ -32,7 +33,7 @@ async def create(
 
         required_fields = ['model_type', 'model_name', 'token']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         model_type, model_name, model_api_url,  = data.get('model_type'), data.get('model_name'), data.get('model_api_url')
         token, user, password = data.get('token'), data.get('user'), data.get('password')
@@ -57,11 +58,10 @@ async def create(
         if existing_model:
             await classifiers_collection.update_one(
                 {"_id": existing_model["_id"]},
-                {"$set": {"is_active": "0", "modified_by": user_id, "modified_date": datetime.now()}}
+                {"$set": {"is_active": "0", "modified_by": user_id, "modified_date": current_time()}}
             )
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         # Insert the new model with is_active=1
         document = {
@@ -82,13 +82,12 @@ async def create(
         }
 
         # Insert the new document into the collection
-        result = await classifiers_collection.insert_one(document)
+        await classifiers_collection.insert_one(document)
 
         return {"message": "New model created and active"}
-    except HTTPException as e:
-            raise e
+    
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")        
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e        
 
 # Read documents
 @classifier_router.get("/get")
@@ -101,7 +100,7 @@ async def get(request: Request):
 
         required_fields = ['token']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         token = data.get('token')
         
@@ -125,10 +124,8 @@ async def get(request: Request):
             
         return documents
         
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")   
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e   
 
 # Update a document
 @jwt_token
@@ -145,10 +142,8 @@ async def update_document(filter_query: dict, update_data: dict):
             return {"message": "Document updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="No document found with the given filter")
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")   
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e   
 
 # Delete a document
 @jwt_token
@@ -167,7 +162,7 @@ async def delete_document(company_id: str = Form(...)):
             "$set": {
                 "is_active": "0", 
                 "is_block": "1", 
-                "modified_date": datetime.now()  # Optional: update modified_date
+                "modified_date": current_time()  # Optional: update modified_date
             }
         }
         
@@ -178,10 +173,8 @@ async def delete_document(company_id: str = Form(...)):
             return {"message": "Document updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="No document found with the given company id")
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")   
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e   
 
 @jwt_token
 @x_app_key
@@ -199,7 +192,7 @@ async def disable(company_id: str = Form(...)):
             "$set": {
                 "is_active": "0", 
                 "is_block": "0", 
-                "modified_date": datetime.now()  # Optional: update modified_date
+                "modified_date": current_time()  # Optional: update modified_date
             }
         }
         
@@ -210,9 +203,7 @@ async def disable(company_id: str = Form(...)):
             return {"message": "Document updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="No document found with the given company id")
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")   
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e   
 
 

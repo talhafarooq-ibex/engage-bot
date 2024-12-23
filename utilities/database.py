@@ -1,12 +1,13 @@
-import string, urllib
+import string
+import urllib
+
 from decouple import config
+from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
-from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
-
 
 punc = string.punctuation
-punc = punc.replace('_', '').replace('[', '').replace(']', '')
+punc = punc.replace('_', '')
 
 host = config("DATABASE_HOST")
 username = config("DATABASE_USERNAME")
@@ -29,7 +30,7 @@ async def database_names():
                 
         connection_string = f"mongodb://{username_encoded}:{password_encoded}@{host}:27017"
     else:   
-        connection_string = f"mongodb://{host}:27017",
+        connection_string = f"mongodb://{host}:27017"
 
     client = AsyncIOMotorClient(connection_string)
     

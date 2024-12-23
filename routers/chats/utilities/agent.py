@@ -1,14 +1,20 @@
-import json, requests, uuid
-from decouple import config
+import json
+import uuid
 from datetime import datetime
-from fastapi import HTTPException
 
-from utilities.database import connect
-from utilities.redis import enqueue, delete_from_queue
-from routers.chats.utilities.summary import client_summary_anythingllm, client_summary_otherllms
-from routers.chats.utilities.suggestions import client_suggestions_anythingllm, client_suggestions_otherllms
-
+import requests
 import urllib3
+from decouple import config
+from fastapi import HTTPException
+from utilities.database import connect
+from utilities.redis import delete_from_queue, enqueue
+from utilities.time import current_time
+
+from routers.chats.utilities.suggestions import (
+    client_suggestions_anythingllm, client_suggestions_otherllms)
+from routers.chats.utilities.summary import (client_summary_anythingllm,
+                                             client_summary_otherllms)
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 slug_db = config("SLUG_DATABASE")
@@ -28,10 +34,10 @@ display_agent_end_message_english = config("DISPLAY_AGENT_END_MESSAGE_ENGLISH")
 display_agent_end_message_arabic = config("DISPLAY_AGENT_END_MESSAGE_ARABIC")
 
 sentiment_url = config("SENTIMENT_URL")
-x_app_key = config("X_APP_KEY")
+x_app_key_var = config("X_APP_KEY")
 
 sentiment_headers = {
-    'x-app-key': x_app_key,
+    'x-app-key': x_app_key_var,
     'x-super-team': '100'
 }
 
@@ -87,8 +93,7 @@ async def agent_goodbye(
         message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")  
+        human_time = current_time()
 
         if profiles_record['preference'] == language_english:
             if agent:
@@ -143,12 +148,11 @@ async def agent_takeover(
         message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
-        if not llm_choice == 'anythingllm':
+        if llm_choice != 'anythingllm':
             history_collections = db['history']
             await history_collections.delete_many({'SessionId': session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S")  
+        human_time = current_time()  
 
         if profiles_record['preference'] == language_english:
             text = display_human_takeover_message_english
@@ -202,8 +206,7 @@ async def agent_message(
         message_record = await messages_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
         profiles_record = await profiles_collections.find_one({"workspace_id": workspace_id, "session_id": session_id})
 
-        now = datetime.now()
-        human_time = now.strftime("%d/%m/%Y %H:%M:%S") 
+        human_time = current_time()
 
         message_record['roles'].append({
             "type": 'human-agent', "text": text, "timestamp": human_time, "agent_name": agent_name, "agent_id": agent_id, 

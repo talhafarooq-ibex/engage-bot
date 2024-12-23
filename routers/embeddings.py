@@ -1,25 +1,30 @@
-import os, shutil, torch
-from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredMarkdownLoader, UnstructuredHTMLLoader, JSONLoader, UnstructuredExcelLoader
-from langchain_community.document_loaders.csv_loader import CSVLoader
-from langchain_unstructured import UnstructuredLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_chroma import Chroma
-from langchain_community.vectorstores import LanceDB
-from lancedb.rerankers import LinearCombinationReranker
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
+import os
+import shutil
 from datetime import datetime
 
+import torch
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from lancedb.rerankers import LinearCombinationReranker
+from langchain.docstore.document import Document
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import (JSONLoader, PyMuPDFLoader,
+                                                  UnstructuredExcelLoader,
+                                                  UnstructuredHTMLLoader,
+                                                  UnstructuredMarkdownLoader)
+from langchain_community.document_loaders.csv_loader import CSVLoader
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS, LanceDB
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_unstructured import UnstructuredLoader
 from utilities.database import connect, format_docs
-from utilities.validation import check_required_fields
+from utilities.time import current_time
+from utilities.validation import check_required_fields, validate_inputs
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -35,30 +40,21 @@ async def get(request: Request):
 
         required_fields = ['bot_id', 'workspace_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id = data.get('bot_id'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
 
-        db = await connect()
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, _, _ = result
 
-        bots_collections = db['bots']
-        workspace_collections = db['workspace']
+        db = await connect()
         library_collections = db['library']
         embeddings_collections = db['embeddings']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-            
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
 
         library_records = await library_collections.find({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id
@@ -82,10 +78,8 @@ async def get(request: Request):
 
         return JSONResponse(embeddings_record, status_code = 200)   
         
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @embeddings_router.post('/create')
 @x_super_team
@@ -97,34 +91,27 @@ async def create(request: Request):
 
         required_fields = ['bot_id', 'workspace_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
         
         bot_id, workspace_id = data.get('bot_id'), data.get('workspace_id')
         
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, workspace_record, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
-        documents_collections = db['library']
+        library_collections = db['library']
         embeddings_collections = db['embeddings']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
+        bots_collections = db['bots']
         
-        library_records = await documents_collections.find({
+        library_records = await library_collections.find({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
         }).to_list(length=None)
-
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
 
         if not library_records:
             raise HTTPException(status_code = 404, detail = "An error occurred: no documents available for the bot")
@@ -177,7 +164,7 @@ async def create(request: Request):
                     
                     data.extend(loader.load())
             
-            except:
+            except Exception:
                 if record['url']:
                     raise HTTPException(status_code = 404, detail = f"An error occurred: existing connection was forcibly closed by the remote host for {record['url']}.")
                 
@@ -233,8 +220,7 @@ async def create(request: Request):
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
         })
 
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         if embeddings_record:
             await embeddings_collections.update_one({"_id": embeddings_record["_id"]}, {"$set": {"is_active": 0}})
@@ -253,12 +239,10 @@ async def create(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
                         
-        return JSONResponse(content={"detail": f"Embeddings have been created."}, status_code = 200)
+        return JSONResponse(content={"detail": "Embeddings have been created."}, status_code = 200)
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
     
 @embeddings_router.post('/response')
 @x_super_team
@@ -270,32 +254,24 @@ async def response(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'text', 'k']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
 
         bot_id, workspace_id, text, k = data.get('bot_id'), data.get('workspace_id'), data.get('text'), int(data.get('k'))
 
         company_id = request.headers.get('x-super-team')
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, workspace_record, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
         embeddings_collections = db['embeddings']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
         
         embeddings_record = await embeddings_collections.find_one({
             "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
         })
-
-        workspace_record = await workspace_collections.find_one({
-            "company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1
-        })
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: no workspace found for this bot or key doesn't exist")
 
         if not embeddings_record:
             raise HTTPException(status_code = 404, detail = "An error occurred: no embeddings available for the bot")
@@ -328,7 +304,5 @@ async def response(request: Request):
 
         return JSONResponse(documents, status_code = 200)                                               
 
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e

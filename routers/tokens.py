@@ -1,13 +1,15 @@
-import string, secrets
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
+import secrets
+import string
 from datetime import datetime
 
 from decorators.jwt import jwt_token
 from decorators.key import x_app_key
 from decorators.teams import x_super_team
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from utilities.database import connect
-from utilities.validation import check_required_fields
+from utilities.time import current_time
+from utilities.validation import check_required_fields, validate_inputs
 
 tokens_router = APIRouter()
 
@@ -21,26 +23,20 @@ async def get(request: Request):
 
         required_fields = ['bot_id', 'workspace_id']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
         
         bot_id, workspace_id = data.get('bot_id'), data.get('workspace_id')
 
         company_id = request.headers.get('x-super-team')
 
-        db = await connect()
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            _, _, _ = result
 
-        bots_collections = db['bots']
-        workspace_collections = db['workspace']
+        db = await connect()
         tokens_collections = db['tokens']
-            
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-        
-        workspace_record = await workspace_collections.find_one({"company_id": company_id, "bot_id": bot_id, 'workspace_id': workspace_id})
-        
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: workspace doesn\'t exist for this bot")
         
         tokens_record = await tokens_collections.find_one({"company_id": company_id, "bot_id": bot_id, "workspace_id": workspace_id, "is_active": 1})
 
@@ -51,10 +47,8 @@ async def get(request: Request):
         else:
             raise HTTPException(status_code = 404, detail = "An error occurred: token doesn\'t exist for this workspace")
             
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e
 
 @tokens_router.post("/regenerate")
 @x_super_team
@@ -66,31 +60,24 @@ async def regenerate(request: Request):
 
         required_fields = ['bot_id', 'workspace_id', 'expiry_date']
         if not check_required_fields(data, required_fields):
-            raise HTTPException(status_code = 400, detail = f"An error occurred: missing parameter(s)")
+            raise HTTPException(status_code = 400, detail = "An error occurred: missing parameter(s)")
         
         bot_id, workspace_id, expiry_date = data.get('bot_id'), data.get('workspace_id'), data.get('expiry_date')
 
         company_id = request.headers.get('x-super-team')
         user = request.state.current_user
 
+        result = await validate_inputs(company_id, bot_id, workspace_id)
+        if not result:
+            raise HTTPException(status_code = 400, detail = "An error occurred: invalid parameter(s)")
+        else:
+            bots_record, _, _ = result
+
         db = await connect()
-
-        bots_collections = db['bots']
         tokens_collections = db['tokens']
-        workspace_collections = db['workspace']
-
-        bots_record = await bots_collections.find_one({"company_id": company_id, "bot_id": bot_id, "is_active": 1})
-
-        if not bots_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: bot doesn\'t exist")
-
-        workspace_record = await workspace_collections.find_one({"company_id": company_id, "bot_id": bot_id, 'workspace_id': workspace_id})
+        bots_collections = db['bots']
         
-        if not workspace_record:
-            raise HTTPException(status_code = 404, detail = "An error occurred: workspace doesn\'t exist for this bot")
-        
-        now = datetime.now()
-        date_time = now.strftime("%d/%m/%Y %H:%M:%S")
+        date_time = current_time()
 
         date_format = "%d/%m/%Y %H:%M:%S"
         created_date = datetime.strptime(date_time, date_format)
@@ -120,9 +107,7 @@ async def regenerate(request: Request):
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_date": date_time}})
         await bots_collections.update_one({"_id": bots_record["_id"]}, {"$set": {"modified_by": user}})
                 
-        return JSONResponse(content={"detail": f"Token has been created."}, status_code = 200)
+        return JSONResponse(content={"detail": "Token has been created."}, status_code = 200)
 
-    except HTTPException as e:
-            raise e
     except Exception as e:
-        raise HTTPException(status_code = 500, detail = f"An error occurred: {str(e)}")
+        raise HTTPException(status_code = 500, detail=f"An error occurred: {str(e)}") from e

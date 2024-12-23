@@ -1,9 +1,9 @@
-from pymongo import DESCENDING, ASCENDING
-from math import ceil
-from decouple import config
 from datetime import datetime, timedelta
-from fastapi import HTTPException
+from math import ceil
 
+from decouple import config
+from fastapi import HTTPException
+from pymongo import ASCENDING, DESCENDING
 from utilities.database import connect
 from utilities.redis import view_queue
 
@@ -74,14 +74,13 @@ async def active_sessions(
 
             if int(agent_display) and (record['transfer_conversation'] and not record['end_conversation']):
                 for role in record['roles'][::-1]:
-                    if role['type'] == 'human-agent':
-                        if role['agent_id'] == agent_id:
-                            chats_history.append({
-                                'session_id': record['session_id'], 'username': username, 'email': email, 'phone': phone, 
-                                'last_message': record['roles'][-1]['text'], 'last_timestamp': record['roles'][-1]['timestamp'], 
-                                'sentiment': sentiments, 'status': 'AGENT'})
-                            
-                            break
+                    if role['type'] == 'human-agent' and role['agent_id'] == agent_id:
+                        chats_history.append({
+                            'session_id': record['session_id'], 'username': username, 'email': email, 'phone': phone, 
+                            'last_message': record['roles'][-1]['text'], 'last_timestamp': record['roles'][-1]['timestamp'], 
+                            'sentiment': sentiments, 'status': 'AGENT'})
+                        
+                        break
             
             if int(queue_display):
                 if not configuration_record['auto_assignment']:
@@ -108,13 +107,12 @@ async def active_sessions(
 
             if int(takeover_display) and (record['human_intervention'] and not record['end_conversation'] and not record['transfer_conversation']):
                 for role in record['roles']:
-                    if role['text'] == display_human_takeover_message_arabic or role['text'] == display_human_takeover_message_english:
-                        if role['agent_id'] == agent_id:
-                            chats_history.append({
-                                'session_id': record['session_id'], 'username': username, 'email': email, 'phone': phone, 
-                                'last_message': record['roles'][-1]['text'], 'last_timestamp': record['roles'][-1]['timestamp'], 
-                                'sentiment': sentiments, 'status': 'TAKEOVER'
-                            })
+                    if (role['text'] == display_human_takeover_message_arabic or role['text'] == display_human_takeover_message_english) and role['agent_id'] == agent_id:
+                        chats_history.append({
+                            'session_id': record['session_id'], 'username': username, 'email': email, 'phone': phone, 
+                            'last_message': record['roles'][-1]['text'], 'last_timestamp': record['roles'][-1]['timestamp'], 
+                            'sentiment': sentiments, 'status': 'TAKEOVER'
+                        })
         
         start = (page - 1) * limit  
         end = start + limit 
@@ -180,9 +178,8 @@ async def inactive_sessions(
         for record in message_records:
             record_timestamp = datetime.strptime(record['latest_timestamp'], "%d/%m/%Y %H:%M:%S")
 
-            if start_date_filter and end_date_filter:
-                if not (start_of_day <= record_timestamp <= end_of_day):
-                    continue
+            if start_date_filter and end_date_filter and not (start_of_day <= record_timestamp <= end_of_day):
+                continue
 
             latest_timestamp = datetime.now()
             expiration_time = datetime.strptime(record['latest_timestamp'], timestamp_format) + timedelta(minutes = int(record['timeout']))
@@ -271,10 +268,7 @@ async def session_details(
             raise HTTPException(status_code = 404, detail = "An error occurred: no conversation found for session id")
         
         csat_record = await csat_collections.find_one({'session_id': session_id})
-        if csat_record:
-            csat_score = csat_record['score']
-        else:
-            csat_score = None
+        csat_score = csat_record['score'] if csat_record else None
 
         chats_history = []
         profiles_record = await profiles_collections.find_one({'session_id': session_id})
